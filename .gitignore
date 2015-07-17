@@ -41,3 +41,25 @@ $RECYCLE.BIN/
 Network Trash Folder
 Temporary Items
 .apdisk
+stdafx.h
+*.tlog
+*.obj
+Debug/Test.exe.embed.manifest
+*.manifest
+Debug/Test.exe.embed.manifest.res
+*.rc
+Debug/Test.lastbuildstate
+*.log
+out.bin
+stdafx.cpp
+*.pch
+Debug/vc100.idb
+*.cache
+Debug/vc100.pdb
+*.vcxproj
+Test.vcxproj.filters
+*.user
+targetver.h
+*.jpg
+out.txt
+ReadMe.txt
