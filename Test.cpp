@@ -2,8 +2,10 @@
 #include<iostream>
 #include<fstream>
 #include<stdio.h>
+#include <Windows.h>
 using namespace std;
 
+HANDLE hSerial;			//for com-port
 
 struct pkt_header{
 			char pkt_start[2];
@@ -16,6 +18,10 @@ struct pkt_header{
 char* Packer(char*, pkt_header, char*);
 pkt_header Get_Header (char*);
 char* DoSmth (char*, char*, int);
+
+void OpenCOMPort();
+void WriteCOM();
+void ReadCOM();
 
 
 int main()
@@ -142,11 +148,11 @@ int main()
 	}
 
 
-
-
 	cin.get();
 	return 0;
 }
+
+
 char *Packer(char* byte_arr,pkt_header header, char* datap)
 {
 	byte_arr[0] = header.pkt_start[0];
@@ -185,4 +191,58 @@ char* DoSmth (char* target, char* strt_pos, int size)
 	for(int i = 0;i<size;i++)
 		target[i]=*(strt_pos+i);
 	return target;
+}
+
+
+
+
+
+void OpenCOMPort(){
+
+	LPCTSTR sPortName = L"COM3";  
+
+	hSerial = ::CreateFile(sPortName,GENERIC_READ | GENERIC_WRITE,0,0,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,0);
+	if(hSerial==INVALID_HANDLE_VALUE)
+	{
+		if(GetLastError()==ERROR_FILE_NOT_FOUND)
+		{
+			cout << "serial port does not exist.\n";
+		}
+		cout << "some other error occurred.\n";
+	}
+
+	DCB dcbSerialParams = {0};
+	dcbSerialParams.DCBlength=sizeof(dcbSerialParams);
+	if (!GetCommState(hSerial, &dcbSerialParams))
+	{
+		cout << "getting state error\n";
+	}
+	dcbSerialParams.BaudRate=CBR_9600;
+	dcbSerialParams.ByteSize=8;
+	dcbSerialParams.StopBits=ONESTOPBIT;
+	dcbSerialParams.Parity=NOPARITY;
+	if(!SetCommState(hSerial, &dcbSerialParams))
+	{
+		cout << "error setting serial port state\n";
+	}
+}
+
+void ReadCOM()
+{
+      DWORD iSize;
+      char sReceivedChar;
+      while (true)
+      {
+            ReadFile(hSerial, &sReceivedChar, 1, &iSize, 0);
+			if (iSize > 0)
+				cout << sReceivedChar;
+      }
+}
+
+void WriteCOM()
+{
+DWORD dwBytesWritten;
+char data[] = "Test";
+DWORD dwSize = sizeof(data);
+WriteFile (hSerial,data,dwSize,&dwBytesWritten ,NULL);
 }
