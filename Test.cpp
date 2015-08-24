@@ -246,3 +246,42 @@ char data[] = "Test";
 DWORD dwSize = sizeof(data);
 WriteFile (hSerial,data,dwSize,&dwBytesWritten ,NULL);
 }
+
+
+unsigned int *PackToInt(char* ArrayOfChar, int length)
+{  
+	if (length%4!=0){ cout<<" size eror "<<endl; return 0;}
+
+unsigned int*  ArrayOfInt = new unsigned int [length/4];
+
+for (int i=0; i<length; i+=4) { 
+	ArrayOfInt[i/4] =  (ArrayOfChar[i+3]<<24) | (ArrayOfChar[i+2]<<16) | (ArrayOfChar[i+1]<<8) | ArrayOfChar[i]; 
+	}
+
+	//delete [] ArrayOfChar;
+
+	return ArrayOfInt;
+	
+}
+
+
+
+char *PackToChar(unsigned int* ArrayOfInt, int length)
+{ 
+	//if (length%2!=0){ cout<<" size eror "<<endl; return 0;}
+
+	char*  ArrayOfChar = new char [length*4];
+
+	for (int i=0; i<length*4; i++) ArrayOfChar[i]=0;
+
+	for (int i=0; i<length*4; i=i+4) { 
+	ArrayOfChar[i] =	(ArrayOfChar[i])|(ArrayOfInt[i/4])		 ;
+	ArrayOfChar[i+1] =	(ArrayOfChar[i+1])|(ArrayOfInt[i/4]>>8)	 ;
+	ArrayOfChar[i+2] = 	(ArrayOfChar[i+2])|(ArrayOfInt[i/4]>>16) ;
+	ArrayOfChar[i+3] =	(ArrayOfChar[i+3])|(ArrayOfInt[i/4]>>24) ;
+		}
+
+	//delete [] ArrayOfInt;
+
+	return ArrayOfChar;
+}
