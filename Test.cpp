@@ -285,3 +285,61 @@ char *PackToChar(unsigned int* ArrayOfInt, int length)
 
 	return ArrayOfChar;
 }
+
+
+
+void MakeCRC16Table(void)
+{
+ Word r;
+  for(int i=0; i<256; i++)
+   {
+    r = ((Word)i)<<8;
+     for(byte j=0; j<8; j++)
+       {
+        if(r&(1<<15)) r=(r<<1)^0x8005;
+        else r=r<<1;
+       }
+     crctable[i]=r;
+   }
+}
+
+
+
+Word GetCRC16(byte *buf, Word len) 
+{ 
+ Word crc; 
+ crc = 0xFFFF; 
+ while(len--) 
+  { 
+   crc = crctable[((crc>>8)^*buf++)&0xFF] ^ (crc<<8); 
+  } 
+ crc ^= 0xFFFF; 
+ return crc; 
+}
+
+
+
+/*
+
+typedef long Word;
+Word crctable[256];
+
+void MakeCRC16Table(void);
+Word GetCRC16(byte *buf, Word len);
+Word GetCRC16(char *buf, Word len);
+
+*/
+
+//MakeCRC16Table();
+//GetCRC16(buf, strlen(buf));
+Word GetCRC16(char *buf, Word len) 
+{ 
+ Word crc; 
+ crc = 0xFFFF; 
+ while(len--) 
+  { 
+   crc = crctable[((crc>>8)^*buf++)&0xFF] ^ (crc<<8); 
+  } 
+ crc ^= 0xFFFF; 
+ return crc; 
+}
