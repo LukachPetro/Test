@@ -15,8 +15,24 @@
 
 using namespace std;
 
-#define T_TIMER 1
-#define TEST_LVL 0
+#define T_TIMER 1		// 2 & 3 needs to be compiled with -lrt to Link the Real Time shared library
+#define TEST_LVL 0	// 1 - time, 2 - parser
+#define pkgoffset 17	// startbits do not count
+
+// ---------------------------------------------
+
+struct pack_
+{
+	bool SBit;				// 2	
+	int plen;				// 2
+	int id;				// 2
+	unsigned int time;		// 8
+	int crc;				// 4
+	int dlen;
+	char data[1024];
+};
+
+// ---------------------------------------------
 
 class file_
 {
@@ -30,27 +46,6 @@ public:
 	file_(char *, char *, int);							// write to file
 	~file_() { delete[] buffer; }
 	int printHEX(int, unsigned int);
-};
-
-class packager
-{
-public:
-	file_ * pFile;
-};
-
-class serial_
-{
-public:
-	int fd;										// File descriptor for the port
-	int read_port_flag;
-	// ------------
-	serial_();
-	~serial_();										// close the serial port
-	serial_(char*, int, int, int);
-	//void set_blocking(int);
-	int send(char*, int);
-	int receive(char *, unsigned int);
-	int receive(vector<char> *);
 };
 
 class test_data
@@ -68,6 +63,21 @@ class test_data
 		// -------------------------------------
 		unsigned int  get_time(void);
 		int get_time_diff(unsigned int);  				// elapsed time, 4bytes
+};
+
+class serial_
+{
+public:
+	int fd;										// File descriptor for the port
+	int read_port_flag;
+	// ------------
+	serial_();
+	~serial_();										// close the serial port
+	serial_(char*, int, bool);
+	int send(char*);
+	int send(char*, int, int, test_data*);
+	int receive(char *, unsigned int);
+	int receive_and_parse(vector<pack_> *);
 };
 
 // =============================================
@@ -109,6 +119,15 @@ file_::file_(char *fName, char * buf, int len)				// write to file
 	fwrite (buf, len, 1, pFile);							// write 1 element of lenght len from buf to pFile
 	fclose (pFile);
 }
+
+/*
+file_::file_(char *fName, char * buf, int len)				// append to file
+{
+	pFile = fopen (fName,"wb");
+	fwrite (buf, len, 1, pFile);							// write 1 element of lenght len from buf to pFile
+	fclose (pFile);
+}
+*/
 
 int file_::printHEX(int pos, unsigned int len)
 {
@@ -178,7 +197,7 @@ int file_::printHEX(int pos, unsigned int len)
 // Serial
 // ---------------------------------------------
 
-serial_::serial_(char *devName, int spd = B9600, int par = 0, int block = 0)	// The values for speed are B115200, B230400, B9600, B19200, B38400, B57600, B1200, B2400, B4800, etc. The values for parity are 0 (meaning no parity), PARENB|PARODD (enable parity and use odd), PARENB (enable parity and use even), PARENB|PARODD|CMSPAR (mark parity), and PARENB|CMSPAR (space parity).
+serial_::serial_(char *devName, int spd = B9600, bool block = false)	// The values for speed are B115200, B230400, B9600, B19200, B38400, B57600, B1200, B2400, B4800, etc. The values for parity are 0 (meaning no parity), PARENB|PARODD (enable parity and use odd), PARENB (enable parity and use even), PARENB|PARODD|CMSPAR (mark parity), and PARENB|CMSPAR (space parity).
 {
 	fd = open(devName, O_RDWR | O_NOCTTY | O_NDELAY);	// name of the serial port,  O_RDWR - read and write access | O_CTTY - prevent other input (like keyboard) from affecting what we read | O_NDELAY - don't care if he other side is connected
 	if (fd != -1)
@@ -191,7 +210,7 @@ serial_::serial_(char *devName, int spd = B9600, int par = 0, int block = 0)	// 
 		cfsetospeed(&tty_s, spd);					// sets the output baud rate
 /*
 	Setting  a bit		OR		|=		number |= 1 << x;
-	Clearing a bit		AND		&= ~	number &= ~(1 << x)
+	Clearing a bit		AND		&= ~		number &= ~(1 << x)
 	Toggling a bit		XOR		^= 		number ^= 1 << x
 	Checking a bit 						bit = (number >> x) & 1
 	Changing nth bit to x				number ^= (-x ^ number) & (1 << n);
@@ -199,7 +218,7 @@ serial_::serial_(char *devName, int spd = B9600, int par = 0, int block = 0)	// 
 		tty_s.c_cflag |= (CLOCAL | CREAD);			// enable the receiver and set local mode.		CLOCAL - Ignore modem control lines.
 		
 		tty_s.c_cflag &= ~PARENB;					// no parity.		PARENB - Enable parity generation on output and parity checking for input.
-		tty_s.c_cflag |= par;							// set parity if specified
+		//tty_s.c_cflag |= par;							// set parity if specified
 		tty_s.c_cflag &= ~CSTOPB;					// one stop bit.	CSTOPB - Set two stop bits, rather than one.
 		
 		tty_s.c_cflag &= ~CSIZE;						// Character size mask. Set character size as 8 bits
@@ -243,6 +262,52 @@ int serial_::send(char * buf, int len)						// returns n of bytes send
 	return n;
 }
 
+
+int serial_::send(char * buf, int len, int dataSegm, test_data * t1)							// generate and send a package, returns n of bytes send
+{
+/*
+	startbit		2
+	p_lenght		2
+	ID			2
+	time			8
+	CRC			4
+	DATA
+*/
+	int n = 0, p = 0;					// n = bytes rec., p = packages rec.
+	int dlen = 0;
+	int dataOffset = pkgoffset;			// n of bytes taken by the header
+	for (int i = 0; i < len; ++i)
+	{
+		if (i*dataSegm < len)
+		{
+			p++;
+			if (len-i*dataSegm < dataSegm){				// fix to prevent overflow
+				dlen = len - i*dataSegm;
+			}else{
+				dlen = dataSegm;
+			}
+
+			char t_string2[dataOffset];
+			int plen = sprintf(t_string2, "\n\n%.2x%.2x%.9u4444", dataOffset+dlen, i, t1->get_time());
+			
+			n += write(fd, t_string2, plen);					// temp solution
+			n += write(fd, &(buf[i*dataSegm]), dlen);			//
+		}
+		else
+		{
+			cout << "* loop terminated" << endl;
+			break;
+		}
+	}
+	cout << "Sent: " << p << " packages (" << n << " bytes)." << endl;
+	if (n < 0)
+	{
+		cout << "send() failed!\n";
+		// return -1;
+	}
+	return n;
+}
+
 int serial_::receive(char * buf, unsigned int len)
 {
 	int n = read (fd, buf, len);
@@ -254,53 +319,157 @@ int serial_::receive(char * buf, unsigned int len)
 	return n;
 }
 
-int serial_::receive(vector<char> * buf)
+int serial_::receive_and_parse(vector<pack_> * buf)
 {
-	int n = 0;
-	char cbuf;
-/*
-	while(read(fd, cbuf, 1))
+	int n = 0, n2 = 0;					// n bytes read, n2 total bytes read
+	int pkgcnt = 0;
+	int len = -1;						// bytes of package recieved
+	char temp[10] = {0};
+	char tpkg[1024] = {0};
+	char cbuf = '\0';
+	bool hBeg = false;
+
+	pack_ p_;
+	p_.SBit = false;
+	p_.plen = -1;
+	p_.id = -1;
+	p_.time = 0;
+	p_.crc = -1;
+
+	memset(p_.data, 0, 1024);
+
+	printf("* Waiting for incoming package...\n");
+
+	while(true)
 	{
-		buf.push_back(cbuf);
-		//cbuf = '';
+		n = read(fd, &cbuf, 1);
+		if(n == 0 && n2 > 0) break;			// check if the receive was started and stop if there is no more data to process
+		if(n > 0) {
+			if (hBeg) {						// startbit recieved, ready to recieve new package
+				if(p_.plen == -1) {
+					switch (len) {
+						case 0:			// pkg offset, 1st byte
+							{
+								tpkg[len] = temp[0] = cbuf;
+								len = 1;
+							}
+							break;
+						case 1:			// pkg offset, 2nd byte
+							{
+								tpkg[len] = temp[1] = cbuf;
+								temp[2] = '\0';				// null terminated for strtol(), this elemens is overwriten afterwards
+								p_.plen = (int)strtol(temp, NULL, 16);
+								printf("received: %i bytes (%.5i total)\n", p_.plen, n2);
+							}
+							break;
+					}
+				}else{
+					len ++;
+					if (len < p_.plen-1)						// store LEN of package bytes, count starts from 1
+					{
+						if (len < pkgoffset){					// save header and data separately
+							tpkg[len] = cbuf;				// save header bytes
+						}else{
+							p_.data[len - pkgoffset] = cbuf;	// save data bytes
+						}
+					}
+					else
+					{
+						p_.data[len - pkgoffset] = cbuf;		// push last byte manually (caused by [len < p_.plen-1] state)
+						
+						pkgcnt ++;
+
+						/* parse pkg */
+						p_.dlen = len - pkgoffset + 1;
+
+						sprintf(temp, "%c%c", tpkg[2], tpkg[3]);	// join chars into temp c-string
+						p_.id = (int)strtol(temp, NULL, 16);		// cast from hex to int
+
+						sprintf(temp, "%c%c%c%c%c%c%c%c%c", tpkg[4], tpkg[5], tpkg[6], tpkg[7], tpkg[8], tpkg[9], tpkg[10], tpkg[11], tpkg[12]);
+						p_.time = (unsigned int)strtol(temp, NULL, 10);
+
+						sprintf(temp, "%c%c%c%c", tpkg[13], tpkg[14], tpkg[15], tpkg[16]);
+						p_.crc = (int)strtol(temp, NULL, 10);
+#if TEST_LVL == 2
+						printf("* Processing package...\n");
+						printf("headerlen: %i   datalen: %i\n", pkgoffset, p_.dlen);
+						printf("raw header: %s\n", tpkg);
+						printf("pID: %i\n", p_.id);
+						printf("time: %i\n", p_.time);
+						printf("crc: %i\n", p_.crc);
+						printf("data: %s\n", p_.data);
+						printf("* Preparing to receive anoter package...\n");
+#endif
+						/* push pkg */
+						buf->push_back(p_);
+
+						/* reset and prepare to receive next */
+						hBeg = false;
+						p_.SBit = false;
+						p_.plen = -1;
+						len = -1;
+						memset(temp, 0, 10);
+						memset(tpkg, 0, 1024);
+						memset(p_.data, 0, 1024);
+					}
+				}
+			}
+			else
+			{
+				if (cbuf == 0xA)							// startbit?
+				{
+					if (cbuf == 0xA && p_.SBit == true)		// 2 of 2?
+					{
+						hBeg = true;					// ok, do it
+						len = 0;
+					}
+					else	p_.SBit = true;					// first of 2? ok, try again next time
+				}
+				else	p_.SBit = false;					// reset
+			}
+			cbuf = '\0';
+		}
+		n2 += n;
 	}
-	
-	if (n <= 0)
+
+	printf("* received: %i packages (bytes: %i)\n", pkgcnt, n2);
+
+	if (n2 <= 0)
 	{
 		cout << "recieve() failed!\n";
 		return -1;
 	}
-*/
-	return n;
+
+	return n2;
 }
 
 // ---------------------------------------------
 // Time
 // ---------------------------------------------
 
-unsigned int test_data::get_time(void)					// get current timestamp with uSec, return value is 4bytes long 9 digit number, first 6 digits - time, last 3 digits - uSec
+unsigned int test_data::get_time(void)						// get current timestamp with uSec, return value is 4bytes long 9 digit number, first 3 digits - time, last 6 digits - uSec
 {
-#if T_TIMER == 1									// get UNIX time and uSec
+#if T_TIMER == 1										// get UNIX time and uSec
 	struct timeval ts;
 	if(gettimeofday(&ts, NULL) != 0) cout << "Error while getting time. " << errno << endl;
 	#if TEST_LVL == 1
-		cout << "Sec1 : " << ts.tv_sec << "   uSec1: " << ts.tv_usec/ 1.0e3 << endl;
+		cout << "Sec1 : " << ts.tv_sec << "   uSec1: " << ts.tv_usec << "   Time1: " << (unsigned int)(((ts.tv_sec % 1000)*1000000)+ts.tv_usec) << endl;
 	#endif
-	return (((ts.tv_sec % 1000000)*1000)+(ts.tv_usec / 1.0e3));
-#elif T_TIMER == 2									// System-wide realtime clock. Setting this clock requires appropriate privileges. 
-	struct timespec ts;								// theprogram needs to be compiled with -lrt flag to Link the Real Time shared library
+	return (((ts.tv_sec % 1000)*1000000)+ts.tv_usec);
+#elif T_TIMER == 2										// System-wide realtime clock. Setting this clock requires appropriate privileges. 
+	struct timespec ts;
 	if(clock_gettime(CLOCK_REALTIME, &ts) != 0) cout << "Error while getting time from CLOCK_REALTIME. " << errno << endl;
 	#if TEST_LVL == 1
-		cout << "Sec2 : " << ts.tv_sec << "   nSec2: " << ts.tv_nsec / 1.0e6 << endl;
+		cout << "Sec2 : " << ts.tv_sec << "   uSec2: " << ts.tv_nsec / 1.0e3 << "   Time2: " << (unsigned int)(((ts.tv_sec % 1000)*1000000)+(ts.tv_nsec / 1.0e3)) << endl;
 	#endif
-	return (((ts.tv_sec % 1000000)*1000)+(ts.tv_nsec / 1.0e6));
-#elif T_TIMER == 3									// Clock that cannot be set and represents monotonic time since some unspecified starting point. 
+	return (((ts.tv_sec % 1000)*1000000)+(ts.tv_nsec / 1.0e3));
+#elif T_TIMER == 3										// Clock that cannot be set and represents monotonic time since some unspecified starting point. 
 	struct timespec ts;
 	if(clock_gettime(CLOCK_MONOTONIC, &ts) != 0) cout << "Error while getting time from CLOCK_MONOTONIC. " << errno << endl;
 	#if TEST_LVL == 1
-		cout << "Sec3 : " << ts.tv_sec << "   uSec3: " << ts.tv_nsec / 1.0e6 << endl;
+		cout << "Sec3 : " << ts.tv_sec << "   uSec3: " << ts.tv_nsec / 1.0e3 << "   Time3: " << (unsigned int)(((ts.tv_sec % 1000)*1000000)+(ts.tv_nsec / 1.0e3)) << endl;
 	#endif
-	return (unsigned int)(((ts.tv_sec % 1000000)*1000)+(ts.tv_nsec / 1.0e6));
+	return (((ts.tv_sec % 1000)*1000000)+(ts.tv_nsec / 1.0e3));
 #endif
 }
 
@@ -319,9 +488,9 @@ int test_data::get_time_diff(unsigned int  t)				// elapsed time
 // =============================================
 // ---------------------------------------------
 
-int main (int argc, char *argv[]){
+int main (int argc, char *argv[]) {
 	char iFname[] = "image.png";
-	//char iFname[] = "text.txt";
+	// char iFname[] = "text.txt";
 	char devName1[] = "/dev/pts/1";					// serial device name
 	char devName2[] = "/dev/pts/2";
 
@@ -330,46 +499,42 @@ int main (int argc, char *argv[]){
 	serial_ * s1 = new serial_(devName1);
 	serial_ * s2 = new serial_(devName2);
     
-	std::vector<char> rbuf;
+#define MODE_ 1	// 0 - send, 1 - receive
+
+#if MODE_ == 0
+	file_ * f1 = new file_ (iFname);
+	serial_ * s1 = new serial_(devName1);
+	test_data * t1 = new test_data ();
+	s1->send(f1->buffer, f1->fLen, 50, t1);
+
+#elif MODE_ == 1
+
+	std::vector<pack_> rbuf;
 	rbuf.reserve(1024);
+	serial_ * s2 = new serial_(devName2);
+	test_data * t1 = new test_data ();
+	if(s2->receive_and_parse(&rbuf) == -1) return -1;
+	printf("\x1b[31;1m DONE \x1b[0m\n");
 
-/*
-	unsigned int ts1 = t1->get_time();
-	usleep(123000);								// int usleep(useconds_t usec);	sleep for 0.123sec
-	int ts2 = t1->get_time_diff(ts1);
+	char tfile[] = "output";
+	if( remove( tfile ) != 0 ) printf("Error deleting file\n");	// delete if exists
 
-	cout << "Seconds: " << ts1 << "\nDiff: " << ts2 << endl;
+	FILE * pFile = NULL;
+	pFile = fopen (tfile, "ab");						// append
+	int total_b = 0;
 
-	cout << "Printed: " << f1->printHEX(0, 16) << " bytes\n";
-
-	cout << "Serial handler: " << s1->fd << endl;
-	cout << "Serial handler: " << s2->fd << endl;
-*/
-
-	//cout << "Send: " << s1->send(f1->buffer, f1->fLen) << " bytes\n";
-	//cout << "Send: " << s1->send(f1->buffer, 32) << " bytes\n";
-
-	for (int i = 0; i < 10; ++i)
+	for (std::vector<pack_>::iterator it = rbuf.begin() ; it != rbuf.end(); it++)
 	{
-		unsigned int time_ = t1->get_time();
-		//char * time_string[(((sizeof time_) * 8) + 2)/3 + 2];
-		char time_string[50];
-		int ns = sprintf(time_string, "\n\n\n\nTime:%u\n", time_);	// converts int to char and formats the string, adds header signature 0x0A ( \n x4 ).
-														// On success, the total number of characters written is returned. This count DOES NOT INCLUDE the additional null-character automatically appended at the end of the string. On failure, a negative number is returned.
-		cout << "Time: " << time_ << endl;
-		cout << "Send: " << s1->send(time_string, ns) << " bytes\n";
-		usleep(1000000);
+#if TEST_LVL == 2
+		printf("id: %.2i   time: %u   timediff: %.9u   crc: %i   _dlen:%i\ndata: %s\n", it->id, it->time, t1->get_time_diff(it->time), it->crc, it->dlen, it->data);
+#else
+		printf("id: %.2i   time: %u   timediff: %.9u   crc: %i   _dlen:%i\n", it->id, it->time, t1->get_time_diff(it->time), it->crc, it->dlen);
+#endif
+		total_b += fwrite (it->data, it->dlen, 1, pFile);		// write to file
 	}
+	fclose (pFile);
+	printf("Written: %i bytes.\n", total_b);
+#endif
 
-/*
-	char buf [1024];
-	while (1)
-	{
-		cout << "Received1: " << s2->receive(buf, 1024) << " bytes.\nBuf: " << buf << endl;
-		cout << "Received: " << s2->receive(rbuf) << " bytes.\nBuf: " << buf << endl;
-		memset(buf, 0, 1024);
-		usleep(1000000);
-	}
-*/
 	return 0;
 }
