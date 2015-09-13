@@ -4,20 +4,37 @@
 #include<string>
 #include<iomanip>
 #include<windows.h>
+#include <time.h>
+#include <ctype.h>
+#include <conio.h>
 using namespace std;
 
-#define FRAME_SIZE 1024
-#define HEADER_SIZE 63							// not true  will correct
+#define PING_FRAME 1
+#define FRAME_SIZE 1023
+#define HEADER_SIZE 31						
 #define START_BYTE 0xAA
 #define END_BYTE 0xCC
 #define TERMINATOR 0x00
+#define ITOA_SIZE 10
+#define PCKT_SZE_OFFSET 3
+#define PCKT_TIME_OFFSET 13
+#define PCKT_CRC_OFFSET 23
+#define CRC_SIZE 4
+#define SPACE 0x20
+#define REP 100
+
+#define T_TIMER 1
+#define TEST_LVL 0
+
+
+#define ECHO 0x00
 
 
 struct pkt_header{
 			char pkt_ID;
 			unsigned int pkt_size;
-			char load_crc[4];
-			char hdr_crc;
+			unsigned int time;
+			char load_crc[4];		
 };
 
 void Packer(char*, pkt_header, char*);
@@ -33,16 +50,20 @@ public:
 	DWORD dwSizeOfBytes;			// port op variable 
 	char buff[FRAME_SIZE];
 
-	serial_(LPCSTR, int, int);
+	serial_(string, int, int);
 	~serial_();	
 
-	void SendFrame(char *);
-	void ReadFrame();
+	void SendFrame(pkt_header, char *);
+	int ReadFrame();
 };
 
-serial_::serial_(LPCSTR sPortName, int bdRate=9600, int sParity=0){
+serial_::serial_(string pName, int bdRate=9600, int sParity=0){
 	for(int i = 0; i < FRAME_SIZE;i++) buff[i]=NULL;
-	hSerial = CreateFileA(sPortName,GENERIC_READ | GENERIC_WRITE,0,0,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,0);
+	string prefix = "\\\\.\\";
+	pName = prefix+pName;
+	LPCSTR name;
+	name = pName.c_str();
+	hSerial = CreateFileA(name,GENERIC_READ | GENERIC_WRITE,0,0,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,0);
 	if(hSerial==INVALID_HANDLE_VALUE)
 	{
 		if(GetLastError()==ERROR_FILE_NOT_FOUND)
@@ -51,6 +72,8 @@ serial_::serial_(LPCSTR sPortName, int bdRate=9600, int sParity=0){
 		}
 		cout << "some other error occurred.\n";
 	}
+	else 
+		cout << "connected\n";
 
 	DCB dcbSerialParams = {0};
 	dcbSerialParams.DCBlength=sizeof(dcbSerialParams);
@@ -66,85 +89,160 @@ serial_::serial_(LPCSTR sPortName, int bdRate=9600, int sParity=0){
 	{
 		cout << "error setting serial port state\n";
 	}
-
+	//
+	COMMTIMEOUTS timeout = { 0 };
+	timeout.ReadIntervalTimeout = 50;
+	timeout.ReadTotalTimeoutConstant = 150;
+	//timeout.ReadTotalTimeoutMultiplier = 50;
+	//timeout.WriteTotalTimeoutConstant = 50;
+	//timeout.WriteTotalTimeoutMultiplier = 10;
+	if(!SetCommTimeouts(hSerial,&timeout))
+	{
+		cout << "error setting serial port timeouts\n";
+	}
 }
 serial_::~serial_(){
 	CloseHandle(hSerial);
 }
-void serial_::SendFrame(char* sendObject){
+
+void serial_::SendFrame(pkt_header my_header, char* sendObject){
 	try {
-			pkt_header my_header;															// creating frame header
+			//pkt_header my_header;															// creating frame header
 			my_header.pkt_size = 0;
 			while (sendObject[my_header.pkt_size] != TERMINATOR) my_header.pkt_size++;		// counting bytes in message to send
 			Packer(buff,my_header,sendObject);												// adding header
-			WriteFile (hSerial,&buff,FRAME_SIZE,&dwSizeOfBytes ,NULL);						// COM transaction
+			WriteFile (hSerial,&buff,FRAME_SIZE, &dwSizeOfBytes ,NULL);						// COM transaction
 		}
 		catch (ios_base::failure& e) {
 			cout << "error";
 			cerr << e.what() << '\n';
 			}
-
-
-
-
-	/*char data[] = "Test";
-	DWORD dwSize = sizeof(data);
-	WriteFile (hSerial,data,dwSize,&dwBytesWritten ,NULL);*/
 }
-void serial_::ReadFrame(){
+int serial_::ReadFrame(){
 	try {
 			ReadFile(hSerial, buff, FRAME_SIZE, &dwSizeOfBytes, 0);						// COM port transaction
+			return (int)dwSizeOfBytes;
 	}
 	catch (ios_base::failure& e) {
 		cout << "error";
 		cerr << e.what() << '\n';
+		return -1;
 	}
 
 };
+unsigned int get_time(SYSTEMTIME*);
+
 
 int main()
 {
 	string pName;
-	string prefix = "\\\\.\\";
 	int bdRate;
 	cout << "Enter: port name to open\n";
 	cin >> pName;
-	pName = prefix+pName;
-	LPCSTR name;
-	name = pName.c_str();
-	serial_ oport(name);
-	int m;
-	cout << "Enter mode\nMode 1 is used to send message (initializator) other number receiver mode\n";
-	cout << "Tip: first start receiver then initializator\n";
-	cin >>m;
-	if(m==1)
-		oport.SendFrame("Hello world");
-	else
+	serial_ oport(pName);
+	cout << "Press space to start testing"; 
+	while (true)
 	{
-		oport.ReadFrame();					// reading frame
-
-		/*				readed frame processing			*/
-		pkt_header my_header;
-		for (int i = 0; i < FRAME_SIZE;i++)
+		while(!kbhit())
+		{
+			if (oport.ReadFrame() > 0)
 			{
-				if (oport.buff[i] == (char)START_BYTE && oport.buff[i+1] == (char)START_BYTE)
+				pkt_header header_r = {NULL};
+				Get_Header(header_r,oport.buff);
+				if(header_r.pkt_ID == ECHO)
 				{
-					Get_Header(my_header, &oport.buff[i]);
-					switch (my_header.pkt_ID)
+					oport.SendFrame(header_r,&oport.buff[HEADER_SIZE]);
+					for(int i = 0; i < REP-1; i++)
 					{
-						case (char)END_BYTE:
-						{
-							DoSmth(oport.buff,my_header.pkt_size);
-						}break;
+						while(oport.ReadFrame() == 0);
+						oport.SendFrame(header_r,&oport.buff[HEADER_SIZE]);
 					}
 
 				}
+				cout << endl << oport.dwSizeOfBytes << " bytes received\n";
 			}
-		/*				readed frame processing			*/
-
+		}
+		// initializator
+		if (getch() == SPACE)
+		{
+			pkt_header header_s;
+			SYSTEMTIME timeSt;
+			unsigned int currTime;
+			header_s.pkt_ID = ECHO;
+			int arr_p[REP], max_p = 0, min_p = REP, p_av = 0;		// array with ping values, max min and average ping values
+			for(int i = 0; i < REP;i++)
+			{
+				oport.SendFrame(header_s,"Hello world");
+				header_s.time = get_time(&timeSt);
+				while(true)
+				{
+					if (oport.ReadFrame() > 0)
+					{
+						currTime = get_time(&timeSt);
+						arr_p[i] = currTime- header_s.time;
+						p_av += arr_p[i];
+						if (arr_p[i]>max_p)
+							max_p = arr_p[i];
+						if (arr_p[i]<min_p)
+							min_p = arr_p[i];
+						break;
+					}
+				}
+			}	
+			cout << "\nPING IS: " << p_av/REP << "ms";
+			cout << "\nMax: " << max_p << "ms";
+			cout << "\nMin: " << min_p << "ms"; 
+		}
 	}
-	cin.get();
-	cin.get();
+
+	//char m;
+	//cout << "Enter mode\nMode I initializator S server mode\n";
+	//cout << "Tip: first start server then initializator\n";
+	//while(true)
+	//{
+	//	cin >> m;
+	//	if (m == 's'|| m == 'i')
+	//		break;
+	//		cout << "Enter mode\nMode I initializator S server mode\n";
+	//}
+	//if(m == i)
+	//	/*for (int i = 0; i < 100; i ++)
+	//		oport.SendFrame((char*)&i);*/
+	//	oport.SendFrame("Hello world");
+	//else
+	//{
+	//	unsigned int timesm=0;
+	////	for (int i = 0 ; i < 100; i++)
+	////	{
+	////		oport.ReadFrame();					// reading frame
+
+	////	/*				readed frame processing			*/
+	////	pkt_header my_header;
+	////	for (int i = 0; i < FRAME_SIZE;i++)
+	////		{
+	////			if (oport.buff[i] == (char)START_BYTE && oport.buff[i+1] == (char)START_BYTE)
+	////			{
+	////				Get_Header(my_header, &oport.buff[i]);
+	////				
+	////				switch (my_header.pkt_ID)
+	////				{
+	////					case (char)END_BYTE:
+	////					{
+	////						DoSmth(oport.buff,my_header.pkt_size);
+	////					}break;
+	////				}
+
+	////			}
+	////		}
+	////	if ( i!=0 )
+	////		cout << "\nTime DIFF: " << my_header.time - timesm << endl;
+	////	timesm = my_header.time;		
+	////	/*				readed frame processing			*/
+	////	}
+
+	////}
+	//cin.get();
+	//cin.get();
 	return 0;
 }
 void Packer(char *byte_arr,pkt_header header, char* datap)
@@ -152,32 +250,51 @@ void Packer(char *byte_arr,pkt_header header, char* datap)
 	byte_arr[0] = START_BYTE;
 	byte_arr[1] = START_BYTE;
 	byte_arr[2] = header.pkt_ID;
-
-	char buff[20];
+	SYSTEMTIME mtime;
+	
+	int i;
+	char buff[ITOA_SIZE];						// buffer for itoa out
+	// packing info size value (uint)  
 	itoa(header.pkt_size,buff,10);
+	for( i = 0; i < ITOA_SIZE; i++)
+		byte_arr[i+PCKT_SZE_OFFSET]=buff[i];
 
-	for(int i = 0; i < 20; i++)
-		byte_arr[i+3]=buff[i];
-	for (int i = 0; i < 32; i ++)
-		byte_arr [i+23] = header.load_crc[i];
-	for (int i = 0; i < 8; i ++)
-		byte_arr [i+55] = header.load_crc[i];
-	for (int i = 0; i < (FRAME_SIZE - HEADER_SIZE) && datap[i]!= 0x00; i ++)
+	// packing time value (uint)
+	if(header.time == NULL)
+	{
+		header.time = get_time(&mtime);
+		itoa(header.time,buff,10);
+		for(i = 0; i < ITOA_SIZE; i++)
+			byte_arr[i+PCKT_TIME_OFFSET]=buff[i];
+	}
+
+	// packing frame crc (uint)
+	for ( i = 0; i < CRC_SIZE; i ++)
+		byte_arr [i+PCKT_CRC_OFFSET] = header.load_crc[i];
+	
+	// packing data into frame
+	for ( i = 0; i < (FRAME_SIZE - HEADER_SIZE) && datap[i]!= 0x00; i ++)
 		byte_arr [i+HEADER_SIZE] = datap[i];
 }
 void Get_Header (pkt_header &my_header,char* msg_bgn)
 {
+	//crc processing //
+	SYSTEMTIME timestrp;
 	my_header.pkt_ID = *(msg_bgn+2);
-	my_header.pkt_size = atoi(msg_bgn+3);
-
-	for (int i = 0; i < 4; i ++)
-		my_header.load_crc[i]=*(msg_bgn+23+i);
-		my_header.hdr_crc = *(msg_bgn+28);
+	my_header.pkt_size = atoi(msg_bgn+PCKT_SZE_OFFSET);
+	cout << "DELAY: " << get_time(&timestrp) - (unsigned)atoi(msg_bgn+PCKT_TIME_OFFSET)<< "ms" << endl; 
+	my_header.time = (unsigned)atoi(msg_bgn+PCKT_TIME_OFFSET);
 }
 void DoSmth (char* readed, int size)
 {
+	cout << "RECEIVED " << size << " BYTES\n";
 	cout << "Received message is: \"";
 	for(int i = 0 ; i < size;i++)
 		cout << readed[HEADER_SIZE+i];
 	cout << "\"";
+}
+unsigned int get_time(SYSTEMTIME* timestrp)
+{
+	GetSystemTime(timestrp);
+	return (unsigned int)(timestrp->wMinute*10e4 + timestrp->wSecond*10e2 + timestrp->wMilliseconds);
 }
