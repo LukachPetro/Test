@@ -255,7 +255,7 @@ int main()
 			oport.ReadFrame();
 			
 			unsigned int dRate;
-			unsigned double frate;
+			double frate;
 			dRate = atoi(oport.buff+HEADER_SIZE);
 			frate = (double)dRate;
 			cout << "DATA RATE IS: " << dRate << "bit/s || ";
