@@ -10,7 +10,7 @@
 using namespace std;
 
 #define PING_FRAME 1
-#define FRAME_SIZE 1023
+#define FRAME_SIZE 256
 #define HEADER_SIZE 31						
 #define START_BYTE 0xAA
 #define END_BYTE 0xCC
@@ -22,13 +22,16 @@ using namespace std;
 #define CRC_SIZE 4
 #define SPACE 0x20
 #define REP 100
+#define ATT REP/2
 
 #define T_TIMER 1
 #define TEST_LVL 0
 
 
 #define ECHO 0x00
-
+#define DRATERQ 0x04	// data rate request
+#define DRATERS 0x05	// data rate response
+#define TESTR	0x11	// test routine ID
 
 struct pkt_header{
 			char pkt_ID;
@@ -54,7 +57,9 @@ public:
 	~serial_();	
 
 	void SendFrame(pkt_header, char *);
+	void SendFrame(pkt_header, int, char*);
 	int ReadFrame();
+	int Readit(int );
 };
 
 serial_::serial_(string pName, int bdRate=9600, int sParity=0){
@@ -118,6 +123,21 @@ void serial_::SendFrame(pkt_header my_header, char* sendObject){
 			cerr << e.what() << '\n';
 			}
 }
+void serial_::SendFrame(pkt_header my_header,int nsize, char* sendObject)
+{
+	try {
+			//pkt_header my_header;															// creating frame header
+			my_header.pkt_size = 0;
+			char* frame = new char[nsize];
+			while (sendObject[my_header.pkt_size] != TERMINATOR) my_header.pkt_size++;		// counting bytes in message to send
+			Packer(frame,my_header,sendObject);												// adding header
+			WriteFile (hSerial,&frame,nsize, &dwSizeOfBytes ,NULL);						// COM transaction
+		}
+		catch (ios_base::failure& e) {
+			cout << "error";
+			cerr << e.what() << '\n';
+			}
+}
 int serial_::ReadFrame(){
 	try {
 			ReadFile(hSerial, buff, FRAME_SIZE, &dwSizeOfBytes, 0);						// COM port transaction
@@ -130,17 +150,32 @@ int serial_::ReadFrame(){
 	}
 
 };
+int serial_::Readit(int readsize)
+{
+	try {
+		char* readarr = new char[readsize];
+		ReadFile(hSerial, readarr, readsize, &dwSizeOfBytes, 0);						// COM port transaction
+		return (int)dwSizeOfBytes;
+	}
+	catch (ios_base::failure& e) {
+		cout << "error";
+		cerr << e.what() << '\n';
+		return -1;
+	}
+};
 unsigned int get_time(SYSTEMTIME*);
 
 
 int main()
 {
+	SYSTEMTIME timeSt;
+	unsigned int currTime;
 	string pName;
 	int bdRate;
 	cout << "Enter: port name to open\n";
 	cin >> pName;
 	serial_ oport(pName);
-	cout << "Press space to start testing"; 
+	cout << "Press space to start testing";
 	while (true)
 	{
 		while(!kbhit())
@@ -159,17 +194,34 @@ int main()
 					}
 
 				}
-				cout << endl << oport.dwSizeOfBytes << " bytes received\n";
+				if(header_r.pkt_ID == DRATERQ)
+				{
+					unsigned int TF = 0, TL = 0, dRate = 0;
+					char itoarr[ITOA_SIZE];
+					for(int i = 0; i < 4; i++)
+					{
+						oport.ReadFrame();
+						if (i == 0)
+							TF = get_time(&timeSt);
+						if (i == 3)
+							TL = get_time(&timeSt);
+					}
+					dRate = FRAME_SIZE*3*8*1000/(TL-TF);
+					cout << "data rate: " << dRate << endl;
+					itoa(dRate,itoarr,10);
+					header_r.pkt_ID = DRATERS;
+					oport.SendFrame(header_r,itoarr);
+				}
+				//cout << endl << oport.dwSizeOfBytes << " bytes received\n";
 			}
 		}
 		// initializator
 		if (getch() == SPACE)
 		{
 			pkt_header header_s;
-			SYSTEMTIME timeSt;
-			unsigned int currTime;
 			header_s.pkt_ID = ECHO;
 			int arr_p[REP], max_p = 0, min_p = REP, p_av = 0;		// array with ping values, max min and average ping values
+			// ping testing
 			for(int i = 0; i < REP;i++)
 			{
 				oport.SendFrame(header_s,"Hello world");
@@ -191,7 +243,23 @@ int main()
 			}	
 			cout << "\nPING IS: " << p_av/REP << "ms";
 			cout << "\nMax: " << max_p << "ms";
-			cout << "\nMin: " << min_p << "ms"; 
+			cout << "\nMin: " << min_p << "ms" << endl; 
+
+			// here starts DATA RATE testing
+			header_s.pkt_ID = DRATERQ;
+			oport.SendFrame(header_s,"DATA RATE");
+			for (int i = 0; i < 4; i ++)
+			{
+				oport.SendFrame(header_s,"RATE");
+			}
+			oport.ReadFrame();
+			
+			unsigned int dRate;
+			unsigned double frate;
+			dRate = atoi(oport.buff+HEADER_SIZE);
+			frate = (double)dRate;
+			cout << "DATA RATE IS: " << dRate << "bit/s || ";
+			printf ("%f Mbit/s\n",frate/1024./1024.);
 		}
 	}
 
