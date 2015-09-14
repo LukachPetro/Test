@@ -32,6 +32,7 @@ using namespace std;
 #define DRATERQ 0x04	// data rate request
 #define DRATERS 0x05	// data rate response
 #define TESTR	0x11	// test routine ID
+#define LTNCYR	0x08	// latency request
 
 struct pkt_header{
 			char pkt_ID;
@@ -196,21 +197,11 @@ int main()
 				}
 				if(header_r.pkt_ID == DRATERQ)
 				{
-					unsigned int TF = 0, TL = 0, dRate = 0;
-					char itoarr[ITOA_SIZE];
-					for(int i = 0; i < 4; i++)
-					{
-						oport.ReadFrame();
-						if (i == 0)
-							TF = get_time(&timeSt);
-						if (i == 3)
-							TL = get_time(&timeSt);
-					}
-					dRate = FRAME_SIZE*3*8*1000/(TL-TF);
-					cout << "data rate: " << dRate << endl;
-					itoa(dRate,itoarr,10);
 					header_r.pkt_ID = DRATERS;
-					oport.SendFrame(header_r,itoarr);
+					for (int i = 0; i < 4; i ++)
+					{
+						oport.SendFrame(header_r,"RATE");
+					}
 				}
 				//cout << endl << oport.dwSizeOfBytes << " bytes received\n";
 			}
@@ -245,21 +236,24 @@ int main()
 			cout << "\nMax: " << max_p << "ms";
 			cout << "\nMin: " << min_p << "ms" << endl; 
 
-			// here starts DATA RATE testing
+			// DATA RATE testing
+			float TF = 0, TL = 0, dRate = 0;
 			header_s.pkt_ID = DRATERQ;
 			oport.SendFrame(header_s,"DATA RATE");
-			for (int i = 0; i < 4; i ++)
-			{
-				oport.SendFrame(header_s,"RATE");
-			}
-			oport.ReadFrame();
 			
-			unsigned int dRate;
-			double frate;
-			dRate = atoi(oport.buff+HEADER_SIZE);
-			frate = (double)dRate;
-			cout << "DATA RATE IS: " << dRate << "bit/s || ";
-			printf ("%f Mbit/s\n",frate/1024./1024.);
+			for(int i = 0; i < 4; i++)
+			{
+				oport.ReadFrame();
+				if (i == 0)
+					TF = get_time(&timeSt);
+				if (i == 3)
+					TL = get_time(&timeSt);
+			}
+			dRate = FRAME_SIZE*3*8*1000/(TL-TF);
+			cout << "DATA RATE IS: " << dRate << "bit/s || " << dRate/(1024.0*1024.0) << "Mbit/s\n";
+			// Latency testing
+
+			header_s.pkt_ID = LTNCYR;
 		}
 	}
 
