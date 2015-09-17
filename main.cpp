@@ -23,6 +23,8 @@ using namespace std;
 #define SPACE 0x20
 #define REP 100
 #define ATT REP/2
+#define CAP_MIN 100
+#define TIMEOUT 10
 
 #define T_TIMER 1
 #define TEST_LVL 0
@@ -32,7 +34,10 @@ using namespace std;
 #define DRATERQ 0x04	// data rate request
 #define DRATERS 0x05	// data rate response
 #define TESTR	0x11	// test routine ID
-#define LTNCYR	0x08	// latency request
+#define LTNCYRQ	0x08	// latency request
+#define LTNCYRS	0x09	// latency response
+#define DTNCERQ 0x0A	// distance request
+#define DTNCERS 0x10	// distance respoce
 
 struct pkt_header{
 			char pkt_ID;
@@ -176,7 +181,7 @@ int main()
 	cout << "Enter: port name to open\n";
 	cin >> pName;
 	serial_ oport(pName);
-	cout << "Press space to start testing";
+	cout << "Press space to start testing\n";
 	while (true)
 	{
 		while(!kbhit())
@@ -201,6 +206,23 @@ int main()
 					for (int i = 0; i < 4; i ++)
 					{
 						oport.SendFrame(header_r,"RATE");
+					}
+				}
+				if (header_r.pkt_ID == LTNCYRQ)
+				{
+					header_r.pkt_ID = LTNCYRS;
+					for (int i = 0; i < REP;i ++)
+						oport.SendFrame(header_r,"LATENCY");
+				}
+
+				if(header_r.pkt_ID == DTNCERQ)
+				{
+					char ndex[ITOA_SIZE];
+					header_r.pkt_ID = DTNCERS;
+					for(int i = 0; ;i++)
+					{
+						itoa(i,ndex,10);
+						oport.SendFrame(header_r,ndex);
 					}
 				}
 				//cout << endl << oport.dwSizeOfBytes << " bytes received\n";
@@ -250,61 +272,93 @@ int main()
 					TL = get_time(&timeSt);
 			}
 			dRate = FRAME_SIZE*3*8*1000/(TL-TF);
-			cout << "DATA RATE IS: " << dRate << "bit/s || " << dRate/(1024.0*1024.0) << "Mbit/s\n";
+			cout << "\nDATA RATE IS: " << dRate << "bit/s || " << dRate/(1024.0*1024.0) << "Mbit/s\n";
+			
+			
 			// Latency testing
+			int tarr[REP] = {0}, Tarr[REP] = {0}, LaT[REP] = {0};
+			int lt_max = 0, lt_min=REP, lt=0;
+			header_s.pkt_ID = LTNCYRQ;
+			oport.SendFrame(header_s,"LATENCY");
+			for (int i = 0; i < REP; i++)
+			{
+				oport.ReadFrame();
+				Tarr[i] = get_time(&timeSt);
+				Get_Header(header_s,oport.buff);
+				tarr[i] = header_s.time;
+			}
+			for (int i = 0; i < REP-1; i++)
+			{
+				LaT[i] = Tarr[i+1] - Tarr[i] - ( tarr[i+1] - tarr[i]);
+				lt+=LaT[i];
+				if(LaT[i]<lt_min)
+					lt_min=LaT[i];
+				if(LaT[i]>lt_max)
+					lt_max=LaT[i];
+			}
+			cout << "\nLATENCY IS: " << lt/REP << "ms\n";
+			cout << "Max: " << lt_max << "ms\n";
+			cout << "Min: " << lt_min << "ms\n";
 
-			header_s.pkt_ID = LTNCYR;
+
+			// distance testing
+			cout << "\nFor range testing press R:\n";
+			if (getch()=='r')
+			{
+			int missed = 0, captured = CAP_MIN, timeout = 0;
+			int index;
+			header_s.pkt_ID = DTNCERQ;
+			oport.SendFrame(header_s,"DIST");
+			for (int i = 0; ;i++)
+			{
+				cout << "\n missed: " << missed << ", captured: " << captured << ", packet #: " << i << endl;
+				if(oport.ReadFrame()== 0)
+				{
+					timeout++;
+					if (timeout > TIMEOUT)
+					{
+						cout << "\nLOST CONNECTION\n";
+						break;
+					}
+				}
+				else
+				{
+					Get_Header(header_s,oport.buff);
+					index = atoi(oport.buff);
+					if (index > i )
+					{
+						missed = missed + index - i;
+						i = ++index;
+						while(missed < captured/2)
+						{
+							cout << "\n missed: " << missed << ", captured: " << captured << ", packet #: " << i << endl;
+							captured++;
+							i++;
+							if (oport.ReadFrame()==0)
+							{
+								timeout++;
+								if(timeout >TIMEOUT)
+								{
+									cout << "\nLOST CONNECTION\n";
+									break;
+								}
+							}
+								Get_Header(header_s,oport.buff);
+								index = atoi(oport.buff);
+								if (index > i )
+								{
+									missed = missed + index - i;
+									i = index;
+								}
+							}
+						}
+					}
+				}
+			cout << "\nSTOP RANGE LIMIT\n";
+			}
+			cout << "\nTo start testing press \"SPACE\"\n";
 		}
 	}
-
-	//char m;
-	//cout << "Enter mode\nMode I initializator S server mode\n";
-	//cout << "Tip: first start server then initializator\n";
-	//while(true)
-	//{
-	//	cin >> m;
-	//	if (m == 's'|| m == 'i')
-	//		break;
-	//		cout << "Enter mode\nMode I initializator S server mode\n";
-	//}
-	//if(m == i)
-	//	/*for (int i = 0; i < 100; i ++)
-	//		oport.SendFrame((char*)&i);*/
-	//	oport.SendFrame("Hello world");
-	//else
-	//{
-	//	unsigned int timesm=0;
-	////	for (int i = 0 ; i < 100; i++)
-	////	{
-	////		oport.ReadFrame();					// reading frame
-
-	////	/*				readed frame processing			*/
-	////	pkt_header my_header;
-	////	for (int i = 0; i < FRAME_SIZE;i++)
-	////		{
-	////			if (oport.buff[i] == (char)START_BYTE && oport.buff[i+1] == (char)START_BYTE)
-	////			{
-	////				Get_Header(my_header, &oport.buff[i]);
-	////				
-	////				switch (my_header.pkt_ID)
-	////				{
-	////					case (char)END_BYTE:
-	////					{
-	////						DoSmth(oport.buff,my_header.pkt_size);
-	////					}break;
-	////				}
-
-	////			}
-	////		}
-	////	if ( i!=0 )
-	////		cout << "\nTime DIFF: " << my_header.time - timesm << endl;
-	////	timesm = my_header.time;		
-	////	/*				readed frame processing			*/
-	////	}
-
-	////}
-	//cin.get();
-	//cin.get();
 	return 0;
 }
 void Packer(char *byte_arr,pkt_header header, char* datap)
@@ -344,7 +398,7 @@ void Get_Header (pkt_header &my_header,char* msg_bgn)
 	SYSTEMTIME timestrp;
 	my_header.pkt_ID = *(msg_bgn+2);
 	my_header.pkt_size = atoi(msg_bgn+PCKT_SZE_OFFSET);
-	cout << "DELAY: " << get_time(&timestrp) - (unsigned)atoi(msg_bgn+PCKT_TIME_OFFSET)<< "ms" << endl; 
+	//cout << "DELAY: " << get_time(&timestrp) - (unsigned)atoi(msg_bgn+PCKT_TIME_OFFSET)<< "ms" << endl; 
 	my_header.time = (unsigned)atoi(msg_bgn+PCKT_TIME_OFFSET);
 }
 void DoSmth (char* readed, int size)
