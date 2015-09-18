@@ -57,6 +57,7 @@ public:
 	HANDLE hSerial;					// port handle
 	DCB DCBSerialParams;			// port params structure
 	DWORD dwSizeOfBytes;			// port op variable 
+	
 	char buff[FRAME_SIZE];
 
 	serial_(string, int, int);
@@ -101,7 +102,7 @@ serial_::serial_(string pName, int bdRate=9600, int sParity=0){
 		cout << "error setting serial port state\n";
 	}
 	//
-	COMMTIMEOUTS timeout = { 0 };
+	COMMTIMEOUTS timeout={0};
 	timeout.ReadIntervalTimeout = 50;
 	timeout.ReadTotalTimeoutConstant = 150;
 	//timeout.ReadTotalTimeoutMultiplier = 50;
@@ -169,12 +170,11 @@ int serial_::Readit(int readsize)
 		return -1;
 	}
 };
-unsigned int get_time(SYSTEMTIME*);
+unsigned int get_time();
 
 
 int main()
 {
-	SYSTEMTIME timeSt;
 	unsigned int currTime;
 	string pName;
 	int bdRate;
@@ -185,12 +185,12 @@ int main()
 	while (true)
 	{
 		while(!kbhit())
-		{
+		{									// here starts server request processing
 			if (oport.ReadFrame() > 0)
 			{
 				pkt_header header_r = {NULL};
 				Get_Header(header_r,oport.buff);
-				if(header_r.pkt_ID == ECHO)
+				if(header_r.pkt_ID == ECHO)										
 				{
 					oport.SendFrame(header_r,&oport.buff[HEADER_SIZE]);
 					for(int i = 0; i < REP-1; i++)
@@ -200,7 +200,7 @@ int main()
 					}
 
 				}
-				if(header_r.pkt_ID == DRATERQ)
+				if(header_r.pkt_ID == DRATERQ)									// case of data rate request
 				{
 					header_r.pkt_ID = DRATERS;
 					for (int i = 0; i < 4; i ++)
@@ -208,24 +208,24 @@ int main()
 						oport.SendFrame(header_r,"RATE");
 					}
 				}
-				if (header_r.pkt_ID == LTNCYRQ)
+				if (header_r.pkt_ID == LTNCYRQ)									// case of latency request
 				{
 					header_r.pkt_ID = LTNCYRS;
 					for (int i = 0; i < REP;i ++)
 						oport.SendFrame(header_r,"LATENCY");
 				}
 
-				if(header_r.pkt_ID == DTNCERQ)
+				if(header_r.pkt_ID == DTNCERQ)									// case of distance request
 				{
 					char ndex[ITOA_SIZE];
 					header_r.pkt_ID = DTNCERS;
-					for(int i = 0; ;i++)
+					while (true)
 					{
-						itoa(i,ndex,10);
-						oport.SendFrame(header_r,ndex);
+						oport.SendFrame(header_r,"RSP");
+						Sleep(REP);
 					}
+
 				}
-				//cout << endl << oport.dwSizeOfBytes << " bytes received\n";
 			}
 		}
 		// initializator
@@ -238,12 +238,12 @@ int main()
 			for(int i = 0; i < REP;i++)
 			{
 				oport.SendFrame(header_s,"Hello world");
-				header_s.time = get_time(&timeSt);
+				header_s.time = get_time();
 				while(true)
 				{
 					if (oport.ReadFrame() > 0)
 					{
-						currTime = get_time(&timeSt);
+						currTime = get_time();
 						arr_p[i] = currTime- header_s.time;
 						p_av += arr_p[i];
 						if (arr_p[i]>max_p)
@@ -267,9 +267,9 @@ int main()
 			{
 				oport.ReadFrame();
 				if (i == 0)
-					TF = get_time(&timeSt);
+					TF = get_time();
 				if (i == 3)
-					TL = get_time(&timeSt);
+					TL = get_time();
 			}
 			dRate = FRAME_SIZE*3*8*1000/(TL-TF);
 			cout << "\nDATA RATE IS: " << dRate << "bit/s || " << dRate/(1024.0*1024.0) << "Mbit/s\n";
@@ -283,7 +283,7 @@ int main()
 			for (int i = 0; i < REP; i++)
 			{
 				oport.ReadFrame();
-				Tarr[i] = get_time(&timeSt);
+				Tarr[i] = get_time();
 				Get_Header(header_s,oport.buff);
 				tarr[i] = header_s.time;
 			}
@@ -305,53 +305,28 @@ int main()
 			cout << "\nFor range testing press R:\n";
 			if (getch()=='r')
 			{
-			int missed = 0, captured = CAP_MIN, timeout = 0;
-			int index;
-			header_s.pkt_ID = DTNCERQ;
-			oport.SendFrame(header_s,"DIST");
-			for (int i = 0; ;i++)
-			{
-				cout << "\n missed: " << missed << ", captured: " << captured << ", packet #: " << i << endl;
-				if(oport.ReadFrame()== 0)
+				int timeout;
+				unsigned int previous = get_time();
+				header_s.pkt_ID = DTNCERQ;
+				oport.SendFrame(header_s,"DIST");
+				for (int i = 0; ;i++)
 				{
-					timeout++;
-					if (timeout > TIMEOUT)
+					cout << "\npacket #: " << i << endl;
+					if(oport.ReadFrame()== 0)
 					{
-						cout << "\nLOST CONNECTION\n";
-						break;
-					}
-				}
-				else
-				{
-					Get_Header(header_s,oport.buff);
-					index = atoi(oport.buff);
-					if (index > i )
-					{
-						missed = missed + index - i;
-						i = ++index;
-						while(missed < captured/2)
+						timeout++;
+						if (timeout > TIMEOUT)
 						{
-							cout << "\n missed: " << missed << ", captured: " << captured << ", packet #: " << i << endl;
-							captured++;
-							i++;
-							if (oport.ReadFrame()==0)
-							{
-								timeout++;
-								if(timeout >TIMEOUT)
-								{
-									cout << "\nLOST CONNECTION\n";
-									break;
-								}
-							}
-								Get_Header(header_s,oport.buff);
-								index = atoi(oport.buff);
-								if (index > i )
-								{
-									missed = missed + index - i;
-									i = index;
-								}
-							}
+							cout << "\nLOST CONNECTION\n";
+							break;
 						}
+					}
+					else
+					{
+						system("cls");
+						Get_Header(header_s,oport.buff);
+						cout << "; delay is: " << get_time() - previous << "ms\n";
+						previous = get_time();
 					}
 				}
 			cout << "\nSTOP RANGE LIMIT\n";
@@ -378,7 +353,7 @@ void Packer(char *byte_arr,pkt_header header, char* datap)
 	// packing time value (uint)
 	if(header.time == NULL)
 	{
-		header.time = get_time(&mtime);
+		header.time = get_time();
 		itoa(header.time,buff,10);
 		for(i = 0; i < ITOA_SIZE; i++)
 			byte_arr[i+PCKT_TIME_OFFSET]=buff[i];
@@ -395,7 +370,6 @@ void Packer(char *byte_arr,pkt_header header, char* datap)
 void Get_Header (pkt_header &my_header,char* msg_bgn)
 {
 	//crc processing //
-	SYSTEMTIME timestrp;
 	my_header.pkt_ID = *(msg_bgn+2);
 	my_header.pkt_size = atoi(msg_bgn+PCKT_SZE_OFFSET);
 	//cout << "DELAY: " << get_time(&timestrp) - (unsigned)atoi(msg_bgn+PCKT_TIME_OFFSET)<< "ms" << endl; 
@@ -409,8 +383,9 @@ void DoSmth (char* readed, int size)
 		cout << readed[HEADER_SIZE+i];
 	cout << "\"";
 }
-unsigned int get_time(SYSTEMTIME* timestrp)
+unsigned int get_time()
 {
-	GetSystemTime(timestrp);
-	return (unsigned int)(timestrp->wMinute*10e4 + timestrp->wSecond*10e2 + timestrp->wMilliseconds);
+	SYSTEMTIME timestrp;
+	GetSystemTime(&timestrp);
+	return (unsigned int)(timestrp.wMinute*10e4 + timestrp.wSecond*10e2 + timestrp.wMilliseconds);
 }
